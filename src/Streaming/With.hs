@@ -19,26 +19,23 @@ module Streaming.With
     -- ** Temporary files
   , withSystemTempFile
   , withTempFile
-    -- *** Re-exports
-    -- $tempreexports
   , withSystemTempDirectory
   , withTempDirectory
     -- * Re-exports
     -- $reexports
-  , MonadMask
+  , MonadUnliftIO
   , bracket
   ) where
 
 import           Data.ByteString.Streaming (ByteString)
 import qualified Data.ByteString.Streaming as B
 
-import           Control.Monad.Catch    (MonadMask, bracket)
-import           Control.Monad.IO.Class (MonadIO, liftIO)
-import           System.IO              (Handle, IOMode(..), hClose,
-                                         openBinaryFile, openFile)
-import           System.IO.Temp         (withSystemTempDirectory,
-                                         withTempDirectory)
-import qualified System.IO.Temp         as T
+import           Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
+import           Control.Monad.IO.Class  (liftIO)
+import           System.IO               (Handle, IOMode(..), hClose,
+                                          openBinaryFile, openFile)
+import qualified System.IO.Temp          as T
+import           UnliftIO.Exception      (bracket)
 
 --------------------------------------------------------------------------------
 
@@ -46,19 +43,19 @@ import qualified System.IO.Temp         as T
 --
 --   You almost definitely don't want to use this; instead, use
 --   'withBinaryFile' in conjunction with "Data.ByteString.Streaming".
-withFile :: (MonadMask m, MonadIO m) => FilePath -> IOMode -> (Handle -> m r) -> m r
+withFile :: (MonadUnliftIO m) => FilePath -> IOMode -> (Handle -> m r) -> m r
 withFile fp md = bracket (liftIO (openFile fp md)) (liftIO . hClose)
 
 -- | A lifted variant of 'System.IO.withBinaryFile'.
-withBinaryFile :: (MonadMask m, MonadIO m) => FilePath -> IOMode -> (Handle -> m r) -> m r
+withBinaryFile :: (MonadUnliftIO m) => FilePath -> IOMode -> (Handle -> m r) -> m r
 withBinaryFile fp md = bracket (liftIO (openBinaryFile fp md)) (liftIO . hClose)
 
 -- | Write to the specified file.
-writeBinaryFile :: (MonadMask m, MonadIO m) => FilePath -> ByteString m r -> m r
+writeBinaryFile :: (MonadUnliftIO m) => FilePath -> ByteString m r -> m r
 writeBinaryFile fp = withBinaryFile fp WriteMode . flip B.hPut
 
 -- | Append to the specified file.
-appendBinaryFile :: (MonadMask m, MonadIO m) => FilePath -> ByteString m r -> m r
+appendBinaryFile :: (MonadUnliftIO m) => FilePath -> ByteString m r -> m r
 appendBinaryFile fp = withBinaryFile fp AppendMode . flip B.hPut
 
 -- | Apply a function to the contents of the file.
@@ -66,7 +63,7 @@ appendBinaryFile fp = withBinaryFile fp AppendMode . flip B.hPut
 --   Note that a different monadic stack is allowed for the
 --   'ByteString' input, as long as it later gets resolved to the
 --   required output type (e.g. remove transformer).
-withBinaryFileContents :: (MonadMask m, MonadIO m, MonadIO n) => FilePath
+withBinaryFileContents :: (MonadUnliftIO m, MonadUnliftIO n) => FilePath
                           -> (ByteString n () -> m r) -> m r
 withBinaryFileContents fp f = withBinaryFile fp ReadMode (f . B.hGetContents)
 
@@ -83,11 +80,14 @@ withBinaryFileContents fp f = withBinaryFile fp ReadMode (f . B.hGetContents)
 --   'T.getCanonicalTemporaryDirectory'.
 --
 --   @since 0.1.1.0
-withSystemTempFile :: (MonadIO m, MonadMask m)
+withSystemTempFile :: (MonadUnliftIO m)
                    => String -- ^ File name template.  See 'T.openTempFile'
                    -> ((FilePath, Handle) -> m r)
                    -> m r
-withSystemTempFile template = T.withSystemTempFile template . curry
+withSystemTempFile template action =
+  withRunInIO $ \runInIO -> 
+    T.withSystemTempFile template $ \path handle ->
+      runInIO $ action (path, handle)
 
 -- | /This is 'T.withTempFile' from the @temporary@ package with the/
 --   /continuation re-structured to only take one argument./
@@ -104,23 +104,39 @@ withSystemTempFile template = T.withSystemTempFile template . curry
 --   @src/sdist.342@.
 --
 --   @since 0.1.1.0
-withTempFile :: (MonadIO m, MonadMask m)
+withTempFile :: (MonadUnliftIO m)
              => FilePath -- ^ Temp dir to create the file in
              -> String   -- ^ File name template.  See
                          --   'T.openTempFile'.
              -> ((FilePath, Handle) -> m r)
              -> m r
-withTempFile dir template = T.withTempFile dir template . curry
+withTempFile dir template action = 
+  withRunInIO $ \runInIO -> 
+    T.withTempFile dir template $ \path handle ->
+      runInIO $ action (path, handle)
 
-{- $tempreexports
+-- | /This is 'T.withSystemTempDirectory' from the @temporary@ package./
+withSystemTempDirectory :: (MonadUnliftIO m)
+                        => String -- ^ File name template.  See 'T.openTempFile'
+                        -> (FilePath -> m r)
+                        -> m r
+withSystemTempDirectory template action =
+  withRunInIO $ \runInIO ->
+    T.withSystemTempDirectory template $ \path ->
+      runInIO $ action path
 
-These functions are re-exported from the
-<http://hackage.haskell.org/package/temporary temporary> package as-is
-as their structure already matches those found here.
+-- | /This is 'T.withTempDirectory' from the @temporary@ package./
+withTempDirectory :: (MonadUnliftIO m)
+                  => FilePath -- ^ Temp dir to create the file in
+                  -> String   -- ^ File name template.  See
+                              --   'T.openTempFile'.
+                  -> (FilePath -> m r)
+                  -> m r
+withTempDirectory dir template action = 
+  withRunInIO $ \runInIO -> 
+    T.withTempDirectory dir template $ \path ->
+      runInIO $ action path
 
-@since 0.1.1.0
-
--}
 
 --------------------------------------------------------------------------------
 

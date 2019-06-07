@@ -1,0 +1,5 @@
+resolver: lts-13.24
+packages:
+  - '.'
+extra-deps:
+  - streaming-with-0.2.2.1

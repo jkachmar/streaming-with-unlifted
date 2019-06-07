@@ -55,20 +55,20 @@ module Streaming.With.Lifted
   , withTempDirectory
     -- * Re-exports
     -- $reexports
-  , MonadMask
+  , MonadUnliftIO
   , bracket
   ) where
 
 import           Data.ByteString.Streaming (ByteString)
 import qualified Streaming.With            as W
 
-import Control.Exception         (Exception)
-import Control.Monad.Catch       (MonadMask, bracket, throwM)
 import Control.Monad.IO.Class    (MonadIO, liftIO)
+import Control.Monad.IO.Unlift   (MonadUnliftIO)
 import Control.Monad.Managed     (Managed, managed, runManaged)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Cont  (ContT(..), runContT)
 import System.IO                 (Handle, IOMode)
+import UnliftIO.Exception        (Exception, bracket, throwIO)
 
 --------------------------------------------------------------------------------
 
@@ -83,7 +83,7 @@ import System.IO                 (Handle, IOMode)
 --   make writing all the underlying continuations in a nicer fashion
 --   without explicit nesting, rather than as the basis of lower-level
 --   code.
-class (Monad w, MonadMask (WithMonad w), MonadIO (WithMonad w)) => Withable w where
+class (Monad w, MonadUnliftIO (WithMonad w), MonadUnliftIO (WithMonad w)) => Withable w where
   type WithMonad w :: * -> *
 
   liftWith :: (forall r. (a -> WithMonad w r) -> WithMonad w r) -> w a
@@ -97,7 +97,7 @@ instance Withable Managed where
 
   liftAction = liftIO
 
-instance (MonadMask m, MonadIO m) => Withable (ContT r m) where
+instance (MonadUnliftIO m) => Withable (ContT r m) where
   type WithMonad (ContT r m) = m
 
   liftWith = ContT
@@ -128,7 +128,7 @@ class (Withable w) => RunWithable w where
 instance RunWithable Managed where
   runWith = runManaged
 
-instance (MonadMask m, MonadIO m) => RunWithable (ContT () m) where
+instance (MonadUnliftIO m) => RunWithable (ContT () m) where
   runWith = flip runContT return
 
 -- | A helper function to run a computation within a lifted resource
@@ -156,7 +156,7 @@ liftActionIO = liftAction . liftIO
 --
 --   @since 0.2.2.0
 liftThrow :: (Withable w, Exception e) => e -> w a
-liftThrow = liftAction . throwM
+liftThrow = liftAction . throwIO
 
 --------------------------------------------------------------------------------
 
@@ -184,7 +184,7 @@ appendBinaryFile fp inp = liftAction (W.appendBinaryFile fp inp)
 --   Note that a different monadic stack is allowed for the
 --   'ByteString' input, as long as it later gets resolved to the
 --   required output type (e.g. remove transformer).
-withBinaryFileContents :: (Withable w, MonadIO n) => FilePath -> w (ByteString n ())
+withBinaryFileContents :: (Withable w, MonadUnliftIO n) => FilePath -> w (ByteString n ())
 withBinaryFileContents fp = liftWith (W.withBinaryFileContents fp)
 
 --------------------------------------------------------------------------------
